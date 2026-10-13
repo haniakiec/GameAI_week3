@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5645708f86a157740aedbec1e7513e31
+timeCreated: 1431258361
+licenseType: Store
+TextScriptImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 35605
+  packageName: 2D Animated Fantasy Knight, Dragon and Princess Pack
+  packageVersion: fitst release
+  assetPath: Assets/Sprites/animations.txt
+  uploadId: 72817
