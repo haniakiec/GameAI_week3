@@ -8,6 +8,8 @@ TagManager:
   - Hunter
   - Exit
   - SpecialCell
+  - Potion
+  - Poison
   layers:
   - Default
   - TransparentFX

@@ -30,7 +30,7 @@ namespace EscapeLab2D // Groups our game scripts together.
         // Public variables appear in Unity's Inspector.
         // int = whole number; float = number with decimal places.
         [Header("Game rules (try changing these)")]
-        public int requiredCells = 11;     // Cells needed to unlock the exit.
+        public int requiredCells = 10;     // Cells needed to unlock the exit.
         public int startingHealth = 5;     // How many hits the player can take.
         public float gameSeconds = 100f;  // Time limit: 180 seconds = 3 minutes.
 
@@ -148,13 +148,52 @@ namespace EscapeLab2D // Groups our game scripts together.
             // && means AND: both conditions must be true.
             // >= means greater than or equal to.
             // != null checks that the exit reference exists.
-            if (Cells >= requiredCells && exitRenderer != null)
+            if (Cells + SpecialCells >= requiredCells && exitRenderer != null)
             {
                 // If an unlocked sprite was assigned, display it.
                 // Otherwise, change the existing exit colour to green.
                 if (unlockedExitSprite != null) exitRenderer.sprite = unlockedExitSprite;
                 else exitRenderer.color = Color.green;
             }
+        }
+
+        public void CollectSpecialCell()
+        {
+            // Do nothing if the game has ended.
+            if (!Playing) return;
+
+            // ++ increases the number by one.
+            // For example, Cells goes from 3 to 4.
+            SpecialCells++;
+
+            // && means AND: both conditions must be true.
+            // >= means greater than or equal to.
+            // != null checks that the exit reference exists.
+            if (Cells + SpecialCells >= requiredCells && exitRenderer != null)
+            {
+                // If an unlocked sprite was assigned, display it.
+                // Otherwise, change the existing exit colour to green.
+                if (unlockedExitSprite != null) exitRenderer.sprite = unlockedExitSprite;
+                else exitRenderer.color = Color.green;
+            }
+        }
+
+        public void CollectPotion()
+        {
+            // Do nothing if the game has ended.
+            if (!Playing) return;
+
+            Health++;
+        }
+
+        public void CollectPoison()
+        {
+            // Do nothing if the game has ended.
+            if (!Playing) return;
+
+            Health -= 2;
+
+            if (Health <= 0) EndGame("NO HEALTH LEFT!");
         }
 
 
@@ -191,7 +230,7 @@ namespace EscapeLab2D // Groups our game scripts together.
         {
             // Win only if the game is running AND enough cells
             // have been collected. Otherwise, nothing happens.
-            if (Playing && Cells >= requiredCells) EndGame("YOU ESCAPED!");
+            if (Playing && (Cells + SpecialCells) >= requiredCells) EndGame("YOU ESCAPED!");
         }
 
 
@@ -277,9 +316,10 @@ namespace EscapeLab2D // Groups our game scripts together.
             // This is called the conditional operator.
             GUI.Label(new Rect(28, 20, 245, 150),
                 $"ESCAPE LAB 2D\nCells: {Cells}/{requiredCells}\n" +
+                $"Special Cells: {SpecialCells}\n" +
                 $"Health: {Health}    Score: {Score}\n" +
                 $"Time: {Mathf.CeilToInt(Mathf.Max(0f, secondsLeft))}s\n" +
-                (Cells >= requiredCells ? "EXIT OPEN" : "EXIT LOCKED"));
+                (Cells + SpecialCells >= requiredCells ? "EXIT OPEN" : "EXIT LOCKED"));
 
             // Screen.height gives the height of the game window.
             // Subtracting 36 positions the instructions near the bottom.

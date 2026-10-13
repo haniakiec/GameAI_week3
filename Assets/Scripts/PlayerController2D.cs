@@ -1,4 +1,4 @@
-
+using System.Collections;
 using UnityEngine; // Gives access to Unity's built-in features.
 //using UnityEngine.InputSystem;
 
@@ -138,6 +138,21 @@ namespace EscapeLab2D // Groups our game scripts together.
                 game.CollectCell();              // Update the score and cell count.
                 other.gameObject.SetActive(false); // Hide and disable the cell.
             }
+            if (other.CompareTag("SpecialCell"))
+            {
+                game.CollectSpecialCell();              // Update the score and cell count.
+                other.gameObject.SetActive(false); // Hide and disable the cell.
+            }
+             if (other.CompareTag("Potion"))
+            {
+                game.CollectPotion();              // Update the score and cell count.
+                other.gameObject.SetActive(false); // Hide and disable the cell.
+            }
+            if (other.CompareTag("Poison"))
+            {
+                game.CollectPoison();              // Update the score and cell count.
+                other.gameObject.SetActive(false); // Hide and disable the cell.
+            }
         }
 
 
@@ -159,14 +174,35 @@ namespace EscapeLab2D // Groups our game scripts together.
             {
                 game.HitPlayer(); // Reduce health through GameManager.
 
-                // Wait before allowing another hit.
-                // Example: at 5 seconds + 1 second delay = next hit at 6.
+                if (playerVisual != null)
+                    StartCoroutine(ShakePlayer());
+
                 nextHitTime = Time.time + secondsBetweenHits;
             }
 
             // Check the exit repeatedly while touching it.
             // GameManager decides whether enough cells were collected.
             if (other.CompareTag("Exit")) game.TouchExit();
+        }
+
+        [SerializeField] private Transform playerVisual;
+        [SerializeField] private float shakeDuration = 0.15f;
+        [SerializeField] private float shakeMagnitude = 0.08f;
+
+        private IEnumerator ShakePlayer()
+        {
+            Vector3 originalPosition = playerVisual.localPosition;
+            float elapsed = 0f;
+
+            while (elapsed < shakeDuration)
+            {
+                Vector2 offset = Random.insideUnitCircle * shakeMagnitude;
+                playerVisual.localPosition = originalPosition + (Vector3)offset;
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            playerVisual.localPosition = originalPosition;
         }
     }
 }
