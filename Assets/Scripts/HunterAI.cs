@@ -33,6 +33,8 @@ private static System.Collections.Generic.List<HunterAI> allHunters = new System
 
 private void OnEnable() { allHunters.Add(this); }
 private void OnDisable() { allHunters.Remove(this); }
+private GridManager gridManager;
+
 
     private void Start()
     {
@@ -40,6 +42,8 @@ private void OnDisable() { allHunters.Remove(this); }
         
         // Crucial for top-down games so gravity doesn't pull them down
         rb.gravityScale = 0f; 
+        // Automatically find the GridManager in the scene if it isn't assigned
+         gridManager = FindObjectOfType<GridManager>();
         
         ChooseWanderDirection();
     }
@@ -238,6 +242,29 @@ private Vector2 CalculateSeparation()
     }
 
     return steering;
+}
+// 1. Make sure you have a reference to your GridManager
+
+
+private void FindPathToPlayer()
+{
+    if (gridManager == null || player == null) return;
+
+    // 2. Identify the START node (where the hunter currently is)
+    Node startNode = gridManager.NodeFromWorldPoint(rb.position);
+
+    // 3. Identify the TARGET node (where the player currently is)
+    Node targetNode = gridManager.NodeFromWorldPoint(player.position);
+
+    // 4. (Optional check) Make sure the target node isn't inside a wall!
+    if (!targetNode.walkable)
+    {
+        Debug.LogWarning("Player is standing on an unwalkable node/wall!");
+        return;
+    }
+
+    // Now you can pass `startNode` and `targetNode` directly into your A* pathfinding script!
+    // Example: List<Node> path = Pathfinding.FindPath(startNode, targetNode);
 }
     
 }

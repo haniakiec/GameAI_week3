@@ -10,11 +10,13 @@ TagManager:
   - SpecialCell
   - Potion
   - Poison
+  - Enemy
+  - Rival
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Walls
   - Water
   - UI
   - 
