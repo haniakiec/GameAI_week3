@@ -1,8 +1,8 @@
 using System.Collections;
 using UnityEngine; // Gives access to Unity's built-in features.
 //using UnityEngine.InputSystem;
-
-namespace EscapeLab2D // Groups our game scripts together.
+using System.Collections.Generic;
+namespace EscapeLab2D 
 {
     /// <summary>
     /// Controls the player:
@@ -37,6 +37,96 @@ namespace EscapeLab2D // Groups our game scripts together.
         private float nextPowerUpTime; // Earliest time sprint can be used again.
         private bool sprinting;
 
+        [SerializeField] private Pathfinding pathfinder;
+        [SerializeField] private Transform exitTransform;
+
+        private Coroutine movementCoroutine;
+
+        // Call this to start moving to a destination (like the exit or player)
+        public void MoveToTarget(Vector2 destination)
+        {
+            if (pathfinder == null)
+            {
+                Debug.LogWarning("Pathfinder is not assigned.");
+                return;
+            }
+
+            // 1. Get the path from Pathfinding.cs
+            List<Node> path = pathfinder.FindPath(transform.position, destination);
+
+            if (path != null && path.Count > 0)
+            {
+                // Stop any previous movement so they don't overlap
+                if (movementCoroutine != null)
+                {
+                    StopCoroutine(movementCoroutine);
+                }
+
+                // Start following the new path
+                movementCoroutine = StartCoroutine(FollowPathRoutine(path));
+            }
+            else
+            {
+                Debug.Log("No path found to destination!");
+            }
+        }
+
+        private IEnumerator FollowPathRoutine(List<Node> path)
+        {
+            if (path == null || path.Count == 0)
+            {
+                yield break;
+            }
+
+            int targetIndex = 0;
+            Vector2 currentWaypoint = path[targetIndex].worldPosition;
+
+            while (true)
+            {
+                // Move towards the current node's world position
+                transform.position = Vector2.MoveTowards(transform.position, currentWaypoint, moveSpeed * Time.deltaTime);
+
+                // Check if we are close enough to the current waypoint to switch to the next one
+                if (Vector2.Distance(transform.position, currentWaypoint) < 0.1f)
+                {
+                    targetIndex++;
+
+                    // If we reached the end of the path, stop moving
+                    if (targetIndex >= path.Count)
+                    {
+                        yield break;
+                    }
+
+                    currentWaypoint = path[targetIndex].worldPosition;
+                }
+
+                yield return null; // Wait for the next frame
+            }
+        }
+
+        public void CalculateRouteToExit()
+        {
+            if (pathfinder == null || exitTransform == null)
+            {
+                Debug.LogWarning("Pathfinder or exit transform is not assigned.");
+                return;
+            }
+
+            // Get path from current position to the exit position
+            List<Node> path = pathfinder.FindPath(transform.position, exitTransform.position);
+
+            if (path != null)
+            {
+                Debug.Log($"Path found! Total steps to exit: {path.Count}");
+
+                // You can now loop through 'path' nodes to make your character move along node.worldPosition points!
+            }
+            else
+            {
+                Debug.Log("No valid path to the exit found.");
+            }
+        }
+
 
         /// <summary>
         /// AWAKE: Called by Unity when this script is first loaded.
@@ -50,7 +140,7 @@ namespace EscapeLab2D // Groups our game scripts together.
 
             // Finds any active GameManager in the scene.
             // We only need one, so there is no need to search in a particular order.
-            game = FindAnyObjectByType<GameManager>();
+            game = FindObjectOfType<GameManager>();
         }
 
 
@@ -82,7 +172,13 @@ namespace EscapeLab2D // Groups our game scripts together.
 
                 sprinting = false;
             }
-
+            if (Input.GetKeyDown(KeyCode.Space))
+            {
+                if (exitTransform != null)
+                {
+                    MoveToTarget(exitTransform.position);
+                }
+            }
             powerUp = sprinting ? 10f : 0f;
 
 
