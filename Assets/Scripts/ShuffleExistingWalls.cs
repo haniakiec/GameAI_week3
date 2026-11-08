@@ -1,223 +1,180 @@
 using UnityEngine;
 using System.Collections.Generic;
-using Vector2 = UnityEngine.Vector2;
 
-
+/// <summary>
+/// Decides which grid cells are walls. It works only on a bool[,] array
+/// (true = wall), so every wall covers exactly one or several whole cells.
+/// GridManager calls Generate() once and then draws the result.
+/// </summary>
 public class ShuffleExistingWalls : MonoBehaviour
 {
-    [Header("References")]
-    [SerializeField] private GameObject wallPrefab;     
-    [SerializeField] private Transform wallsContainer;  
-    [SerializeField] private GridManager gridManager;   
+    [Header("Walls")]
+    [SerializeField] private int desiredWallCount = 12;   // number of wall segments to place
+    [SerializeField] private int maxSegmentLength = 4;    // each segment is 1..N cells long
 
-    [Header("Spawn Settings")]
-    [SerializeField] private Vector2Int gridDimensions;
-    [SerializeField] private int desiredWallCount;
-    
-    [Header("Safe Zone Settings")]
-    [SerializeField] private Transform exitTransform; //so walls dont block the exit
-    //radius from the exit transform so it is not blocked
-    [SerializeField] private float safeRadius = 2.5f;
-    
-    //to check if player can find a path in the seed to the exit
-    [Header("Path Validation Settings")]
+    [Header("Cells that must stay free of walls")]
     [SerializeField] private Transform playerTransform;
-    //how many times to retry generating a maze if the exit is in an illegal place
+    [SerializeField] private Transform exitTransform;
+    [SerializeField] private int safeRadiusCells = 2;     // no walls this many cells around the exit
+    // Drag hunters, collectibles etc. here. Each object AND all its children keep their cell free.
+    // (A parent object also reserves the cell at its own position, which is harmless.)
+    [SerializeField] private Transform[] keepClear;
+
+    [Header("Path validation")]
     [SerializeField] private int maxGenerationRetries = 50;
 
-    [Header("Seed Settings")]
-    //check if you want a random seed each time
+    [Header("Seed")]
     [SerializeField] private bool useRandomSeed = true;
-    //if you want a specific seed
     [SerializeField] private int mazeSeed = 12345;
 
-    [Header("Collision Avoidance")]
-    //layers on top of which walls should not appear on
-    [SerializeField] private LayerMask avoidanceLayerMask;
-
-    private List<int> blacklistedSeeds = new List<int>();
-    private List<GameObject> spawnedWalls = new List<GameObject>();
-
-    private void Awake()
+    /// <summary>Builds a wall map where the player can reach the exit. true = wall.</summary>
+    public bool[,] Generate(GridManager grid)
     {
-        GenerateAndSpawnWalls();
+        if (playerTransform == null || exitTransform == null)
+        {
+            Debug.LogError("Missing player/exit references in ShuffleExistingWalls!");
+            return grid.BorderOnlyMap();
+        }
+
+        int seed = useRandomSeed ? Random.Range(0, 999999) : mazeSeed;
+        Debug.Log($"Current Maze Seed: {seed}");
+
+        // A private generator, so we don't disturb Unity's global Random used by other scripts.
+        System.Random rng = new System.Random(seed);
+
+        Vector2Int start = grid.WorldToCell(playerTransform.position);
+        Vector2Int exit = grid.WorldToCell(exitTransform.position);
+        bool[,] reserved = BuildReservedMap(grid, start, exit);
+
+        for (int attempt = 1; attempt <= maxGenerationRetries; attempt++)
+        {
+            bool[,] blocked = PlaceWalls(grid, reserved, rng);
+
+            if (IsReachable(blocked, start, exit))
+            {
+                Debug.Log($"Valid maze generated on attempt {attempt}!");
+                return blocked;
+            }
+        }
+
+        Debug.LogWarning("Could not find a valid maze after max retries. Using an empty arena.");
+        return grid.BorderOnlyMap();
     }
 
-    public void GenerateAndSpawnWalls()
+    // ------------------------------------------------------------------
+    // Cells that must never become walls
+    // ------------------------------------------------------------------
+    private bool[,] BuildReservedMap(GridManager grid, Vector2Int start, Vector2Int exit)
     {
-        // set seed or randomize seed
-        int currentSeed = mazeSeed;
-        blacklistedSeeds.Add(21472);
-        if (useRandomSeed)
+        int w = grid.gridSize.x;
+        int h = grid.gridSize.y;
+        bool[,] reserved = new bool[w, h];
+
+        // A square of cells around the exit.
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+                if (Mathf.Max(Mathf.Abs(x - exit.x), Mathf.Abs(y - exit.y)) <= safeRadiusCells)
+                    reserved[x, y] = true;
+
+        reserved[start.x, start.y] = true;
+
+        // Everything the designer listed (and all their children).
+        foreach (Transform root in keepClear)
         {
-            // Keep rolling a new random seed if the current one is in our blacklist
-            int safetyCounter = 0; // Prevents an infinite loop just in case
-            do
-            {
-                currentSeed = Random.Range(0, 999999);
-                safetyCounter++;
-                if (safetyCounter > 100) break; // Emergency break
-            }
-            while (blacklistedSeeds.Contains(currentSeed));
+            if (root == null) continue;
+            foreach (Transform t in root.GetComponentsInChildren<Transform>())
+                Reserve(grid, reserved, t.position);
         }
 
-        Random.InitState(currentSeed);
-        Debug.Log($"Current Maze Seed: {currentSeed}");
-        
-
-        if (wallPrefab == null || gridManager == null || playerTransform == null || exitTransform == null)
-        {
-            Debug.LogError("Missing references in ShuffleExistingWalls!");
-            return;
-        }
-
-        int attempts = 0;
-        bool validPathFound = false;
-
-        //generate a map until there is a path to exit
-        while (!validPathFound && attempts < maxGenerationRetries)
-        {
-            attempts++;
-            //destroy walls
-            if (wallsContainer != null)
-            {
-                for (int i = wallsContainer.childCount - 1; i >= 0; i--)
-                {
-                    Transform child = wallsContainer.GetChild(i);
-
-                    // Skip deletion if this is our template object
-                    if (child.name == "Obstacle A") continue;
-
-                    DestroyImmediate(child.gameObject);
-                }
-            }
-            spawnedWalls.Clear();
-
-            //get ONLY the interior positions for shuffling 
-            List<Vector2> interiorSpots = GetInteriorGridPositionPool();
-
-            //shuffle interior positions using Fisher-Yates
-            for (int i = 0; i < interiorSpots.Count; i++)
-            {
-                int randomIndex = Random.Range(i, interiorSpots.Count);
-                Vector2 temp = interiorSpots[i];
-                interiorSpots[i] = interiorSpots[randomIndex];
-                interiorSpots[randomIndex] = temp;
-            }
-
-            /// spawn walls 
-            int wallsToSpawn = desiredWallCount;
-            int spawnedCount = 0;
-
-            for (int i = 0; i < interiorSpots.Count && spawnedCount < wallsToSpawn; i++)
-            {
-                Vector2 spawnPos = interiorSpots[i];
-
-                // chekc if walls are not overlapping - check if any collider in the avoidanceLayerMask is at this spot
-                Collider2D hitCollider = Physics2D.OverlapBox(spawnPos, Vector2.one * 0.4f, 0f, avoidanceLayerMask);
-                if (hitCollider != null)
-                {
-                    //if there is already wall item there do not place it
-                    continue;
-                }
-                //so all the walls are not facing the same way
-                float randomAngle = Random.Range(0, 4) * 90f;
-                Quaternion spawnRot = Quaternion.Euler(0, 0, randomAngle);
-                //create new wall objects
-                GameObject newWall = Instantiate(wallPrefab, spawnPos, spawnRot, wallsContainer);
-                newWall.layer = LayerMask.NameToLayer("Walls");
-                spawnedWalls.Add(newWall);
-
-                spawnedCount++;
-            }
-
-            // build the grid based on the created walls
-            gridManager.BuildGrid();
-
-            //check if player can get to the exit to confirm the maze layout is legal
-            if (IsPathPossible(playerTransform.position, exitTransform.position))
-            {
-                validPathFound = true;
-                Debug.Log($"Valid maze generated successfully on attempt {attempts}!");
-            }
-        }
-
-        if (!validPathFound)
-        {
-            Debug.LogWarning("Could not find a valid path after max retries.");
-        }
+        return reserved;
     }
-    //creates a map of the maze with all the cells where potential walls can be placed
-    private List<Vector2> GetInteriorGridPositionPool()
+
+    private void Reserve(GridManager grid, bool[,] reserved, Vector2 worldPosition)
     {
-        List<Vector2> interiorPositions = new List<Vector2>(); //positions in the maze where there could be walls placed
-        float cellSize = gridManager.nodeDiameter;
-        Vector2 startPos = (Vector2)transform.position - new Vector2(gridDimensions.x * cellSize / 2f, gridDimensions.y * cellSize / 2f); //player starting point
-
-        //checking every square in the grid
-        for (int x = 0; x < gridDimensions.x; x++)
-        {
-            for (int y = 0; y < gridDimensions.y; y++)
-            {
-                bool isBorder = (x == 0 || x == gridDimensions.x - 1 || y == 0 || y == gridDimensions.y - 1);
-                Vector2 slotPosition = startPos + new Vector2(x * cellSize + cellSize / 2f, y * cellSize + cellSize / 2f);
-
-                if (isBorder) continue; //not creating grid on the borders
-
-                //create a safe radius around the exit - not to put walls there
-                if (exitTransform != null)
-                {
-                    float distanceToExit = Vector2.Distance(slotPosition, exitTransform.position);
-                    if (distanceToExit < safeRadius)
-                    {
-                        continue; 
-                    }
-                }
-
-                interiorPositions.Add(slotPosition);
-            }
-        }
-
-        return interiorPositions;
+        Vector2Int c = grid.WorldToCell(worldPosition);
+        reserved[c.x, c.y] = true;
     }
-    //checks if in the current seed you can get to the exit
-    private bool IsPathPossible(Vector2 startPos, Vector2 targetPos)
-    {
-        //get the start and target of the path - player and exit
-        Node startNode = gridManager.NodeFromWorldPoint(startPos);
-        Node targetNode = gridManager.NodeFromWorldPoint(targetPos);
 
-        if (startNode == null || targetNode == null || !startNode.walkable || !targetNode.walkable)
+    // ------------------------------------------------------------------
+    // Placing walls: straight segments of whole cells
+    // ------------------------------------------------------------------
+    private bool[,] PlaceWalls(GridManager grid, bool[,] reserved, System.Random rng)
+    {
+        int w = grid.gridSize.x;
+        int h = grid.gridSize.y;
+        bool[,] blocked = grid.BorderOnlyMap(); // outer ring is always wall
+
+        int placed = 0;
+        int tries = 0;
+
+        while (placed < desiredWallCount && tries < desiredWallCount * 20)
         {
-            return false;
+            tries++;
+
+            int length = rng.Next(1, maxSegmentLength + 1);
+            bool horizontal = rng.Next(2) == 0;
+            int startX = rng.Next(1, w - 1); // interior cells only
+            int startY = rng.Next(1, h - 1);
+
+            // Collect the cells this segment would cover. Reject it if any cell is
+            // outside the interior, already a wall, or reserved.
+            List<Vector2Int> cells = new List<Vector2Int>();
+            bool fits = true;
+
+            for (int i = 0; i < length && fits; i++)
+            {
+                int x = startX + (horizontal ? i : 0);
+                int y = startY + (horizontal ? 0 : i);
+
+                if (x >= w - 1 || y >= h - 1 || blocked[x, y] || reserved[x, y])
+                    fits = false;
+                else
+                    cells.Add(new Vector2Int(x, y));
+            }
+
+            if (!fits) continue;
+
+            foreach (Vector2Int c in cells) blocked[c.x, c.y] = true;
+            placed++;
         }
 
-        //breadth first search to check connectivity
-        Queue<Node> queue = new Queue<Node>();
-        HashSet<Node> visited = new HashSet<Node>();
+        return blocked;
+    }
 
-        queue.Enqueue(startNode);
-        visited.Add(startNode);
+    // ------------------------------------------------------------------
+    // Flood fill: can the player walk from 'from' to 'to'?
+    // ------------------------------------------------------------------
+    private bool IsReachable(bool[,] blocked, Vector2Int from, Vector2Int to)
+    {
+        int w = blocked.GetLength(0);
+        int h = blocked.GetLength(1);
+
+        if (blocked[from.x, from.y] || blocked[to.x, to.y]) return false;
+
+        bool[,] visited = new bool[w, h];
+        Queue<Vector2Int> queue = new Queue<Vector2Int>();
+        Vector2Int[] directions = { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
+
+        queue.Enqueue(from);
+        visited[from.x, from.y] = true;
 
         while (queue.Count > 0)
         {
-            Node currentNode = queue.Dequeue();
+            Vector2Int current = queue.Dequeue();
+            if (current == to) return true;
 
-            if (currentNode == targetNode)
+            foreach (Vector2Int d in directions)
             {
-                return true; // Path found!
-            }
+                Vector2Int next = current + d;
 
-            foreach (Node neighbor in gridManager.GetNeighbors(currentNode))
-            {
-                if (neighbor.walkable && !visited.Contains(neighbor))
-                {
-                    visited.Add(neighbor);
-                    queue.Enqueue(neighbor);
-                }
+                if (next.x < 0 || next.y < 0 || next.x >= w || next.y >= h) continue;
+                if (blocked[next.x, next.y] || visited[next.x, next.y]) continue;
+
+                visited[next.x, next.y] = true;
+                queue.Enqueue(next);
             }
         }
 
-        return false; // Target is completely walled off
+        return false; // the exit is walled off
     }
 }

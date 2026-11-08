@@ -1,83 +1,112 @@
 using UnityEngine;
+using UnityEngine.Tilemaps;
 using System.Collections.Generic;
 
+/// <summary>
+/// Owns the grid. The grid (an array of Nodes) is the single source of truth:
+/// the generator decides which cells are walls, and this class then
+///   1. stores them as Nodes for A* pathfinding, and
+///   2. paints them onto a Tilemap, which provides the visuals and the collision.
+/// Walls are never detected with physics queries any more, so the pathfinding
+/// grid and the walls on screen cannot disagree.
+/// </summary>
 public class GridManager : MonoBehaviour
 {
-    [Header("Grid Settings")]
-    [SerializeField] private LayerMask obstacleLayer; 
-    [SerializeField] public Vector2 gridWorldSize;   
-    [SerializeField] public float nodeRadius = 0.5f;   // Size of each grid node 
-    [Header("References")]
-    [SerializeField] private ShuffleExistingWalls wallShuffler; 
+    [Header("Grid size (in cells, including the outer wall ring)")]
+    public Vector2Int gridSize = new Vector2Int(24, 14);
+
+    [Header("Walls are painted onto this Tilemap")]
+    [SerializeField] private Tilemap wallTilemap;
+    [SerializeField] private TileBase wallTile;
+
+    [Header("Decides which cells are walls (optional)")]
+    [SerializeField] private ShuffleExistingWalls wallShuffler;
 
     private Node[,] grid;
-    public float nodeDiameter;
-    private int gridSizeX, gridSizeY;
+    private Vector3Int cellOffset; // Tilemap cell that corresponds to grid cell (0, 0)
+
+    // Kept so old code still compiles. The Tilemap's Grid component now decides the cell size.
+    public float nodeDiameter => wallTilemap.layoutGrid.cellSize.x;
 
     private void Awake()
     {
-        if (wallShuffler != null)
-        {        
-            //shuffle walls
-            wallShuffler.GenerateAndSpawnWalls();
-        }
-        else
-        {
-            // build the grid straight away
-            BuildGrid();
-        }
+        // Centre the grid on this object's position.
+        cellOffset = wallTilemap.WorldToCell(transform.position)
+                     - new Vector3Int(gridSize.x / 2, gridSize.y / 2, 0);
 
-        nodeDiameter = nodeRadius * 2f;
-        //number of squares of grid
-        gridSizeX = Mathf.RoundToInt(gridWorldSize.x / nodeDiameter);
-        gridSizeY = Mathf.RoundToInt(gridWorldSize.y / nodeDiameter);
+        // Ask the generator which cells are walls, or just use the outer ring.
+        bool[,] blocked = (wallShuffler != null)
+            ? wallShuffler.Generate(this)
+            : BorderOnlyMap();
+
+        ApplyMap(blocked);
     }
 
-    private void CreateGrid()
+    // ------------------------------------------------------------------
+    // Building the map
+    // ------------------------------------------------------------------
+
+    /// <summary>A map where only the outer ring of cells is a wall. true = wall.</summary>
+    public bool[,] BorderOnlyMap()
     {
-        grid = new Node[gridSizeX, gridSizeY];
-        //start position
-        Vector2 worldBottomLeft = (Vector2)transform.position - Vector2.right * (gridWorldSize.x / 2f) - Vector2.up * (gridWorldSize.y / 2f);
+        bool[,] blocked = new bool[gridSize.x, gridSize.y];
+        for (int x = 0; x < gridSize.x; x++)
+            for (int y = 0; y < gridSize.y; y++)
+                blocked[x, y] = (x == 0 || y == 0 || x == gridSize.x - 1 || y == gridSize.y - 1);
+        return blocked;
+    }
 
-        int walkableCount = 0;
-        int obstacleCount = 0;
+    /// <summary>Turns a wall map into pathfinding Nodes and Tilemap tiles.</summary>
+    private void ApplyMap(bool[,] blocked)
+    {
+        wallTilemap.ClearAllTiles();
+        grid = new Node[gridSize.x, gridSize.y];
 
-        //go through each square in grid
-        for (int x = 0; x < gridSizeX; x++)
+        for (int x = 0; x < gridSize.x; x++)
         {
-            for (int y = 0; y < gridSizeY; y++)
+            for (int y = 0; y < gridSize.y; y++)
             {
-                //calculate at which point in the grid we are now in the loop
-                Vector2 worldPoint = worldBottomLeft + Vector2.right * (x * nodeDiameter + nodeRadius) + Vector2.up * (y * nodeDiameter + nodeRadius);
-                //check if in this point there is a physical object
-                bool walkable = !Physics2D.OverlapCircle(worldPoint, nodeRadius * 0.9f, obstacleLayer);
+                grid[x, y] = new Node(!blocked[x, y], CellToWorld(x, y), x, y);
 
-                // Count them for our verification log
-                if (walkable) walkableCount++;
-                else obstacleCount++;
-                //map this to our grid
-                grid[x, y] = new Node(walkable, worldPoint, x, y);
+                if (blocked[x, y])
+                    wallTilemap.SetTile(CellToTilemap(x, y), wallTile);
             }
         }
-      
-        Debug.Log($"<color=cyan>Grid Successfully Generated!</color> Total Nodes: {gridSizeX * gridSizeY} | Walkable Spaces: {walkableCount} | Blocked Walls: {obstacleCount}");
-    
     }
 
-    //helper method for A* to find which node a position belongs to
+    // ------------------------------------------------------------------
+    // Conversions between grid cells and world positions
+    // ------------------------------------------------------------------
+
+    private Vector3Int CellToTilemap(int x, int y)
+    {
+        return new Vector3Int(x + cellOffset.x, y + cellOffset.y, 0);
+    }
+
+    /// <summary>World position of the centre of a grid cell.</summary>
+    public Vector2 CellToWorld(int x, int y)
+    {
+        return wallTilemap.GetCellCenterWorld(CellToTilemap(x, y));
+    }
+
+    /// <summary>Grid cell containing a world position (clamped to the grid).</summary>
+    public Vector2Int WorldToCell(Vector2 worldPosition)
+    {
+        Vector3Int c = wallTilemap.WorldToCell(worldPosition) - cellOffset;
+        return new Vector2Int(Mathf.Clamp(c.x, 0, gridSize.x - 1),
+                              Mathf.Clamp(c.y, 0, gridSize.y - 1));
+    }
+
+    // ------------------------------------------------------------------
+    // Used by A* pathfinding (same signatures as before)
+    // ------------------------------------------------------------------
+
     public Node NodeFromWorldPoint(Vector2 worldPosition)
     {
-        float percentX = (worldPosition.x - ((Vector2)transform.position).x + gridWorldSize.x / 2f) / gridWorldSize.x;
-        float percentY = (worldPosition.y - ((Vector2)transform.position).y + gridWorldSize.y / 2f) / gridWorldSize.y;
-        percentX = Mathf.Clamp01(percentX);
-        percentY = Mathf.Clamp01(percentY);
-
-        int x = Mathf.RoundToInt((gridSizeX - 1) * percentX);
-        int y = Mathf.RoundToInt((gridSizeY - 1) * percentY);
-        return grid[x, y];
+        Vector2Int c = WorldToCell(worldPosition);
+        return grid[c.x, c.y];
     }
 
-    //helper method to get neighboring nodes for A* pathfinding
     public List<Node> GetNeighbors(Node node)
     {
         List<Node> neighbors = new List<Node>();
@@ -90,41 +119,24 @@ public class GridManager : MonoBehaviour
             int checkX = node.xgrid + dx[i];
             int checkY = node.ygrid + dy[i];
 
-            // check if it's within the grid boundaries
-            if (checkX >= 0 && checkX < gridSizeX && checkY >= 0 && checkY < gridSizeY)
+            if (checkX >= 0 && checkX < gridSize.x && checkY >= 0 && checkY < gridSize.y)
             {
                 Node neighbor = grid[checkX, checkY];
-
-                // check if the cell is walkable
-                if (neighbor.walkable)
-                {
-                    neighbors.Add(neighbor);
-                }
+                if (neighbor.walkable) neighbors.Add(neighbor);
             }
         }
         return neighbors;
     }
 
-    //visually showing the gird - visible with gizmos on
+    // Shows the grid in the Scene view (turn Gizmos on). White = walkable, red = wall.
     private void OnDrawGizmos()
     {
-        Gizmos.DrawWireCube(transform.position, new Vector3(gridWorldSize.x, gridWorldSize.y, 1));
+        if (grid == null || wallTilemap == null) return;
 
-        if (grid != null)
+        foreach (Node n in grid)
         {
-            foreach (Node n in grid)
-            {
-                Gizmos.color = n.walkable ? Color.white : Color.red;
-                Gizmos.DrawCube(n.worldPosition, Vector3.one * (nodeDiameter - 0.1f));
-            }
+            Gizmos.color = n.walkable ? new Color(1f, 1f, 1f, 0.25f) : new Color(1f, 0f, 0f, 0.5f);
+            Gizmos.DrawCube(n.worldPosition, Vector3.one * (nodeDiameter - 0.1f));
         }
     }
-
-    public void BuildGrid()
-    {
-        nodeDiameter = nodeRadius * 2f;
-        gridSizeX = Mathf.RoundToInt(gridWorldSize.x / nodeDiameter);
-        gridSizeY = Mathf.RoundToInt(gridWorldSize.y / nodeDiameter);
-        CreateGrid();
-    }   
 }
