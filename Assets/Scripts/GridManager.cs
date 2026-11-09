@@ -10,17 +10,18 @@ using System.Collections.Generic;
 /// Walls are never detected with physics queries any more, so the pathfinding
 /// grid and the walls on screen cannot disagree.
 /// </summary>
+[DefaultExecutionOrder(-100)]
 public class GridManager : MonoBehaviour
 {
     [Header("Grid size (in cells, including the outer wall ring)")]
-    public Vector2Int gridSize = new Vector2Int(24, 14);
+    public Vector2Int gridSize = new Vector2Int(24, 16); // default vector that is overridden through scene inspector
 
     [Header("Walls are painted onto this Tilemap")]
     [SerializeField] private Tilemap wallTilemap;
     [SerializeField] private TileBase wallTile;
 
     [Header("Decides which cells are walls (optional)")]
-    [SerializeField] private ShuffleExistingWalls wallShuffler;
+    [SerializeField] private GenerateLevel levelGenerator;
 
     private Node[,] grid;
     private Vector3Int cellOffset; // Tilemap cell that corresponds to grid cell (0, 0)
@@ -35,8 +36,8 @@ public class GridManager : MonoBehaviour
                      - new Vector3Int(gridSize.x / 2, gridSize.y / 2, 0);
 
         // Ask the generator which cells are walls, or just use the outer ring.
-        bool[,] blocked = (wallShuffler != null)
-            ? wallShuffler.Generate(this)
+        bool[,] blocked = (levelGenerator != null)
+            ? levelGenerator.Generate(this)
             : BorderOnlyMap();
 
         ApplyMap(blocked);
