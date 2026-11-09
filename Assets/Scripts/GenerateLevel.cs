@@ -2,10 +2,10 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// Builds the level in three steps:
-///   1. Generate the walls as a bool[,] array (true = wall).
-///   2. Keep only the largest connected open area; sealed-off pockets become wall.
-///   3. Move the player, exit, hunters, collectibles... onto random free cells of that area.
+/// Builds the level in two steps:
+///   1. Generate the walls with LevelLayout.GenerateMaze (a bool[,] array, true = wall).
+///      The maze is connected by construction, so no clean-up pass is needed.
+///   2. Move the player, exit, hunters, collectibles... onto random free cells.
 /// GridManager calls Generate() once and then draws the returned wall map.
 /// </summary>
 public class GenerateLevel : MonoBehaviour
@@ -33,9 +33,11 @@ public class GenerateLevel : MonoBehaviour
         [System.NonSerialized] public List<Transform> spawned = new List<Transform>();
     }
 
-    [Header("Walls")]
-    [SerializeField] private int desiredWallCount = 20;   // number of wall segments to place
-    [SerializeField] private int maxSegmentLength = 4;    // each segment is 1..N cells long
+    [Header("Maze")]
+    [SerializeField] private int corridorSpacing = 3;   // 2 = thin walls, 3 = 2x2 wall blocks
+    [SerializeField, Range(0f, 1f)] private float deadEndRemoval = 0.9f;
+    [SerializeField, Range(0f, 1f)] private float extraLoops = 0.1f;
+    [SerializeField] private bool mirrorLeftRight = false;
 
     [Header("Objects placed after the walls")]
     [SerializeField] private Transform playerTransform;
@@ -62,7 +64,7 @@ public class GenerateLevel : MonoBehaviour
     {
         if (playerTransform == null || exitTransform == null)
         {
-            Debug.LogError("Missing player/exit references in ShuffleExistingWalls!");
+            Debug.LogError("Missing player/exit references in GenerateLevel!");
             return grid.BorderOnlyMap();
         }
 
@@ -81,13 +83,14 @@ public class GenerateLevel : MonoBehaviour
 
         for (int attempt = 1; attempt <= maxGenerationRetries; attempt++)
         {
-            bool[,] blocked = PlaceWalls(grid, rng);
-            List<Vector2Int> region = KeepLargestRegion(blocked);
+            bool[,] blocked = LevelLayout.GenerateMaze(grid.gridSize.x, grid.gridSize.y, corridorSpacing,
+                                                       deadEndRemoval, extraLoops, mirrorLeftRight, rng);
+            List<Vector2Int> freeCells = FreeCells(blocked);
 
             // Skip layouts that leave too little room (the factor 2 keeps the arena from feeling cramped).
-            if (region.Count < needed * 2) continue;
+            if (freeCells.Count < needed * 2) continue;
 
-            if (!TryPlaceObjects(grid, blocked, region, rng)) continue;
+            if (!TryPlaceObjects(grid, blocked, freeCells, rng)) continue;
 
             Physics2D.SyncTransforms(); // make the physics engine see the new positions straight away
             Debug.Log($"Valid maze generated on attempt {attempt}!");
@@ -96,101 +99,24 @@ public class GenerateLevel : MonoBehaviour
 
         Debug.LogWarning("Could not find a valid maze after max retries. Using an empty arena.");
         bool[,] empty = grid.BorderOnlyMap();
-        List<Vector2Int> all = KeepLargestRegion(empty);
-        if (!TryPlaceObjects(grid, empty, all, rng))
+        if (!TryPlaceObjects(grid, empty, FreeCells(empty), rng))
             Debug.LogError("The grid is too small for all the objects. Increase Grid Size.");
         Physics2D.SyncTransforms();
         return empty;
     }
 
     // ------------------------------------------------------------------
-    // Step 1: walls = straight segments of whole cells
+    // All cells that are not a wall
     // ------------------------------------------------------------------
-    private bool[,] PlaceWalls(GridManager grid, System.Random rng)
+    private List<Vector2Int> FreeCells(bool[,] blocked)
     {
-        int w = grid.gridSize.x;
-        int h = grid.gridSize.y;
-        bool[,] blocked = grid.BorderOnlyMap(); // outer ring is always wall
+        List<Vector2Int> cells = new List<Vector2Int>();
 
-        int placed = 0;
-        int tries = 0;
+        for (int x = 0; x < blocked.GetLength(0); x++)
+            for (int y = 0; y < blocked.GetLength(1); y++)
+                if (!blocked[x, y]) cells.Add(new Vector2Int(x, y));
 
-        while (placed < desiredWallCount && tries < desiredWallCount * 20)
-        {
-            tries++;
-
-            int length = rng.Next(1, maxSegmentLength + 1);
-            bool horizontal = rng.Next(2) == 0;
-            int startX = rng.Next(1, w - 1); // interior cells only
-            int startY = rng.Next(1, h - 1);
-
-            // Collect the cells this segment would cover. Reject it if any cell is
-            // outside the interior or already a wall.
-            List<Vector2Int> cells = new List<Vector2Int>();
-            bool fits = true;
-
-            for (int i = 0; i < length && fits; i++)
-            {
-                int x = startX + (horizontal ? i : 0);
-                int y = startY + (horizontal ? 0 : i);
-
-                if (x >= w - 1 || y >= h - 1 || blocked[x, y])
-                    continue;
-                else
-                    cells.Add(new Vector2Int(x, y));
-            }
-
-            foreach (Vector2Int c in cells) blocked[c.x, c.y] = true;
-            placed++;
-        }
-
-        return blocked;
-    }
-
-    // ------------------------------------------------------------------
-    // Step 2: keep the largest open area, wall off everything else
-    // ------------------------------------------------------------------
-    private List<Vector2Int> KeepLargestRegion(bool[,] blocked)
-    {
-        int w = blocked.GetLength(0);
-        int h = blocked.GetLength(1);
-        bool[,] seen = new bool[w, h];
-        List<List<Vector2Int>> regions = new List<List<Vector2Int>>();
-
-        for (int x = 0; x < w; x++)
-        {
-            for (int y = 0; y < h; y++)
-            {
-                if (blocked[x, y] || seen[x, y]) continue;
-
-                // Every cell reachable from (x, y) belongs to the same region.
-                int[,] dist = Distances(blocked, new Vector2Int(x, y));
-                List<Vector2Int> region = new List<Vector2Int>();
-
-                for (int rx = 0; rx < w; rx++)
-                {
-                    for (int ry = 0; ry < h; ry++)
-                    {
-                        if (dist[rx, ry] < 0) continue;
-                        region.Add(new Vector2Int(rx, ry));
-                        seen[rx, ry] = true;
-                    }
-                }
-
-                regions.Add(region);
-            }
-        }
-
-        List<Vector2Int> largest = new List<Vector2Int>();
-        foreach (List<Vector2Int> r in regions)
-            if (r.Count > largest.Count) largest = r;
-
-        // Everything outside the largest region becomes wall.
-        foreach (List<Vector2Int> r in regions)
-            if (r != largest)
-                foreach (Vector2Int c in r) blocked[c.x, c.y] = true;
-
-        return largest;
+        return cells;
     }
 
     /// <summary>
@@ -231,12 +157,12 @@ public class GenerateLevel : MonoBehaviour
     }
 
     // ------------------------------------------------------------------
-    // Step 3: move the objects onto free cells
+    // Step 2: move the objects onto free cells
     // ------------------------------------------------------------------
-    private bool TryPlaceObjects(GridManager grid, bool[,] blocked, List<Vector2Int> region, System.Random rng)
+    private bool TryPlaceObjects(GridManager grid, bool[,] blocked, List<Vector2Int> freeCells, System.Random rng)
     {
         // Free cells in random order. Each object takes one cell, so no two objects share a cell.
-        List<Vector2Int> free = new List<Vector2Int>(region);
+        List<Vector2Int> free = new List<Vector2Int>(freeCells);
         Shuffle(free, rng);
 
         if (free.Count == 0) return false;
