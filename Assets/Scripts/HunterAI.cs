@@ -44,7 +44,14 @@ private GridManager gridManager;
         rb.gravityScale = 0f; 
         // Automatically find the GridManager in the scene if it isn't assigned
          gridManager = FindObjectOfType<GridManager>();
-        
+
+        if (player == null)
+        {
+            GameObject playerObject = GameObject.FindWithTag("Player");
+            player = playerObject.transform;
+            playerRb = playerObject.GetComponent<Rigidbody2D>();
+        }
+
         ChooseWanderDirection();
     }
 
