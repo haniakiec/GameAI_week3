@@ -29,7 +29,7 @@ Transform:
   m_GameObject: {fileID: 910505717839332649}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 3, y: 3.4, z: 0}
+  m_LocalPosition: {x: -0.43649763, y: 4.4021177, z: 0}
   m_LocalScale: {x: 1.2, y: 1.6000001, z: 1.3333334}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -129,8 +129,8 @@ CircleCollider2D:
   m_UsedByEffector: 0
   m_CompositeOperation: 0
   m_CompositeOrder: 0
-  m_Offset: {x: -0.017869651, y: -0.10090533}
-  m_Radius: 0.31696433
+  m_Offset: {x: -0.01786967, y: 0.006312094}
+  m_Radius: 0.20975435
 --- !u!114 &4473708827468384243
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -143,14 +143,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 97bad096becb5f34daf3a0b8dfca6b71, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
-  player: {fileID: 0}
   maxSpeed: 4
+  player: {fileID: 0}
   maxSteeringForce: 8
   detectionRadius: 7
   slowingRadius: 2
   wanderDirectionInterval: 2
   playerRb: {fileID: 0}
-  feelerLength: 3
+  feelerLength: 1
   obstacleLayer:
     serializedVersion: 2
     m_Bits: 10
@@ -159,6 +159,7 @@ MonoBehaviour:
   orbitDistance: 2.5
   separationRadius: 1.5
   separationWeight: 2
+  pathRefreshInterval: 0.5
 --- !u!50 &4903555751095341261
 Rigidbody2D:
   serializedVersion: 5

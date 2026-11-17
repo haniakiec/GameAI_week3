@@ -214,6 +214,7 @@ GameObject:
   - component: {fileID: 247}
   - component: {fileID: 248}
   - component: {fileID: 249}
+  - component: {fileID: 251}
   - component: {fileID: 250}
   m_Layer: 0
   m_Name: PLAYER - move with WASD
@@ -373,8 +374,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1b82958582fa513184f65b75e7643059, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EscapeLab2D.PlayerController2D
-  moveSpeed: 10
-  powerUp: 0
+  moveSpeed: 7
+  powerUp: 2
   secondsBetweenHits: 1
   coolDown: 5
   pathfinder: {fileID: 1470112085}
@@ -382,6 +383,18 @@ MonoBehaviour:
   playerVisual: {fileID: 1143917813}
   shakeDuration: 0.3
   shakeMagnitude: 0.3
+--- !u!114 &251
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 245}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6a769c1884e85134b812863103a88815, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Pathfinding
 --- !u!1 &310
 GameObject:
   m_ObjectHideFlags: 0

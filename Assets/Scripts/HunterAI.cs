@@ -1,10 +1,12 @@
 using UnityEngine;
+using UnityEngine.Events;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(Rigidbody2D))]
 public class HunterAI : MonoBehaviour
 {
-    [SerializeField] private Transform player;
     [SerializeField] private float maxSpeed = 4f;
+    [SerializeField] private Transform player;
     [SerializeField] private float maxSteeringForce = 8f;
     [SerializeField] private float detectionRadius = 10f;
     [SerializeField] private float slowingRadius = 2f;
@@ -12,13 +14,13 @@ public class HunterAI : MonoBehaviour
 
     //for predicting the players movement
     [Header("Target Settings")]
-    [SerializeField] private Rigidbody2D playerRb; 
     private Rigidbody2D rb;
+    [SerializeField] Rigidbody2D playerRb;
     private Vector2 velocity;
     private Vector2 wanderDirection;
     private float nextWanderDirectionTime;
     [Header("Feeler / Avoidance Settings")]
-    [SerializeField] private float feelerLength = 1.5f;
+    [SerializeField] private float feelerLength = 3f;
     [SerializeField] private LayerMask obstacleLayer; // Assign your Wall layer in the Inspector
 
     [Header("Surround & Flanking Settings")]
@@ -27,13 +29,31 @@ public class HunterAI : MonoBehaviour
     [SerializeField] private float orbitDistance = 2.5f; 
     [SerializeField] private float separationRadius = 1.5f;
     [SerializeField] private float separationWeight = 2f;
+    // Recalculate the route periodically so the hunter can respond to player movement.
+    [SerializeField] private float pathRefreshInterval = 0.5f;
 
-// Static list so all hunters can find and track each other automatically
-private static System.Collections.Generic.List<HunterAI> allHunters = new System.Collections.Generic.List<HunterAI>();
 
-private void OnEnable() { allHunters.Add(this); }
-private void OnDisable() { allHunters.Remove(this); }
-private GridManager gridManager;
+    [SerializeField] private float attackStartRadius = 4f;
+    [SerializeField] private float attackRange = 1f;
+    [SerializeField] private float attackCooldown = 1f;
+    [SerializeField] private UnityEvent onAttack;
+    private float nextAttackTime;
+
+
+    // A* route state: path nodes are followed in order, then the hunter arrives at pathGoal.
+    private Pathfinding pathfinder;
+    private List<Node> currentPath = new List<Node>();
+    private int currentWaypointIndex;
+    private Vector2 pathGoal;
+    private float nextPathRefreshTime;
+    private bool pathAvailable;
+
+    // Static list so all hunters can find and track each other automatically
+    private static System.Collections.Generic.List<HunterAI> allHunters = new System.Collections.Generic.List<HunterAI>();
+
+    private void OnEnable() { allHunters.Add(this); }
+    private void OnDisable() { allHunters.Remove(this); }
+    private GridManager gridManager;
 
 
     private void Start()
@@ -43,22 +63,35 @@ private GridManager gridManager;
         // Crucial for top-down games so gravity doesn't pull them down
         rb.gravityScale = 0f; 
         // Automatically find the GridManager in the scene if it isn't assigned
-         gridManager = FindObjectOfType<GridManager>();
+        gridManager = FindAnyObjectByType<GridManager>();
+        // Pathfinding uses the same GridManager that creates the walkable tile map.
+        pathfinder = gridManager != null ? gridManager.GetComponent<Pathfinding>() : null;
+
+        // Use the Inspector reference when set; otherwise look up the object tagged Player.
+        GameObject playerObject = player != null ? player.gameObject : GameObject.FindWithTag("Player");
+        if (playerObject != null)
+        {
+            player = playerObject.transform;
+            if (playerRb == null)
+                playerRb = playerObject.GetComponent<Rigidbody2D>();
+        }
+
+        if (pathfinder == null) Debug.LogWarning("HunterAI could not find a Pathfinding component on the GridManager.", this);
         
         ChooseWanderDirection();
     }
 
-    private void Update()
-    {
-        HunterUpdate();
-    }
+    
 
     private Vector2 BasicSeek(Transform target)
     {
+        //find position to target and then scales by the offset to get the desired velocity
         Vector2 offset = (Vector2)target.position - rb.position;
         Vector2 desired = offset.sqrMagnitude > 0f ? offset.normalized * maxSpeed : Vector2.zero;
+        //the desired velocity is the steering force towards the player 
         return desired - velocity;
     }
+    
     //this method can replace  the basic seek
     private Vector2 Pursuit(Transform target, Rigidbody2D targetRb)
     {
@@ -78,6 +111,7 @@ private GridManager gridManager;
         
     }
 
+    //slow down once arriving to the target
     private Vector2 Arrive(Transform target)
     {
         Vector2 toTarget = (Vector2)target.position - rb.position;
@@ -89,32 +123,54 @@ private GridManager gridManager;
         return desired - velocity;
     }
 
-    private void HunterUpdate()
+    private void Update()
     {
+        float playerDistance = player != null
+            ? Vector2.Distance(rb.position, (Vector2)player.position)
+            : float.PositiveInfinity;
+
         Vector2 steering;
-        //if player in detection radius then do not wander anymore, perform basic seek
-        if (player != null && Vector2.Distance(rb.position, (Vector2)player.position) < detectionRadius)
+
+        if (player != null && playerDistance <= detectionRadius)
         {
-            steering =  CalculateSurroundForce();
+            if (playerDistance <= attackRange)
+            {
+                TryAttackPlayer();
+                steering = -velocity;
+            }
+            else
+            {
+                if (Time.time >= nextPathRefreshTime)
+                    FindPathToPlayer();
+
+                steering = FollowPath();
+            }
         }
         else
         {
             if (Time.time >= nextWanderDirectionTime)
-            {
                 ChooseWanderDirection();
-            }
 
-            steering = wanderDirection * maxSpeed - velocity;
-        }
-        Vector2 avoidanceSteering = Avoidance();
-        Vector2 finalSteering = steering;
-        //combine them: Avoidance takes heavy priority if a wall is close
-        if (avoidanceSteering != Vector2.zero)
-        {
-            finalSteering = avoidanceSteering * 2f; // Prioritize wall dodging over chasing the player
+            Vector2 desiredVelocity = wanderDirection * maxSpeed;
+            steering = desiredVelocity - velocity;
+
+            Vector2 avoidanceSteering = Avoidance();
+            if (avoidanceSteering != Vector2.zero)
+                steering += avoidanceSteering;
         }
 
-        ApplySteering(finalSteering);
+        ApplySteering(steering);
+    }
+
+        
+
+    private void TryAttackPlayer()
+    {
+        if (Time.time < nextAttackTime)
+            return;
+
+        nextAttackTime = Time.time + Mathf.Max(0.1f, attackCooldown);
+        onAttack?.Invoke();
     }
 
     //steer smothly instead of sharply changing direction
@@ -179,61 +235,61 @@ private GridManager gridManager;
         }
         return avoidanceForce;
     }
-//methods for the zombie surround
+    
+    //methods for the zombie surround
     private Vector2 CalculateSurroundForce() //calc at which point to orbit around player
-{
-    if (player == null) return Vector2.zero;
-
-    // calc a unique angle around the player based on index for each hunter
-    float angle = ((float)hunterIndex / totalHunters) * 360f;
-    float radian = angle * Mathf.Deg2Rad;
-
-    //Determine the orbit point around the player, convert into actual direction vector from the angle 
-    Vector2 vectorFromAngle = new Vector2(Mathf.Cos(radian), Mathf.Sin(radian));
-    //so the hunters do not walk onto the player
-    Vector2 orbitPoint = (Vector2)player.position + (vectorFromAngle * orbitDistance);
-
-    //Arrive at that point where player is
-    Vector2 arriveForce = ArriveAtPoint(orbitPoint);
-    //not to bump into another hunter
-    Vector2 separationForce = CalculateSeparation();
-
-    return arriveForce + (separationForce * separationWeight);
-}
-
-
-private Vector2 ArriveAtPoint(Vector2 targetPos)
-{
-    //calc the target where to surround the playr (on the orbit point)
-    Vector2 toTarget = targetPos - rb.position;
-    float distance = toTarget.magnitude;
-    //move faster if far away from player
-    float speed = slowingRadius > 0f
-        ? Mathf.Min(maxSpeed, maxSpeed * (distance / slowingRadius))
-        : maxSpeed;
-    //smooth movement - no jittering
-    Vector2 desired = distance > 0f ? toTarget / distance * speed : Vector2.zero;
-    return desired - velocity;
-}
-
-private Vector2 CalculateSeparation()
-{
-    Vector2 steering = Vector2.zero;
-    int count = 0;
-    //scan all hunters in the game, ommit the other ones
-    foreach (var other in allHunters)
     {
-        if (other == this || other == null) continue;
+        if (player == null) return Vector2.zero;
 
-        float distance = Vector2.Distance(rb.position, other.rb.position);
-        //if another hunter is within separation radius then push them away in another direction
-        if (distance < separationRadius && distance > 0f)
-        {
-            Vector2 awayDir = (rb.position - other.rb.position).normalized;
-            steering += awayDir / distance; // Closer objects push away harder
-            count++;
-        }
+        // calc a unique angle around the player based on index for each hunter
+        float angle = ((float)hunterIndex / totalHunters) * 360f;
+        float radian = angle * Mathf.Deg2Rad;
+
+        //Determine the orbit point around the player, convert into actual direction vector from the angle 
+        Vector2 vectorFromAngle = new Vector2(Mathf.Cos(radian), Mathf.Sin(radian));
+        //so the hunters do not walk onto the player
+        Vector2 orbitPoint = (Vector2)player.position + (vectorFromAngle * orbitDistance);
+
+        //Arrive at that point where player is
+        Vector2 arriveForce = ArriveAtPoint(orbitPoint);
+        //not to bump into another hunter
+        Vector2 separationForce = CalculateSeparation();
+
+        return arriveForce + (separationForce * separationWeight);
     }
+
+    private Vector2 ArriveAtPoint(Vector2 targetPos)
+    {
+        //calc the target where to surround the player (on the orbit point)
+        Vector2 toTarget = targetPos - rb.position;
+        float distance = toTarget.magnitude;
+        //move faster if far away from player
+        float speed = slowingRadius > 0f
+            ? Mathf.Min(maxSpeed, maxSpeed * (distance / slowingRadius))
+            : maxSpeed;
+        //smooth movement - no jittering
+        Vector2 desired = distance > 0f ? toTarget / distance * speed : Vector2.zero;
+        return desired - velocity;
+    }
+
+    private Vector2 CalculateSeparation()
+    {
+        Vector2 steering = Vector2.zero;
+        int count = 0;
+        //scan all hunters in the game, ommit the other ones
+        foreach (var other in allHunters)
+        {
+            if (other == this || other == null || other.rb == null) continue;
+
+            float distance = Vector2.Distance(rb.position, other.rb.position);
+            //if another hunter is within separation radius then push them away in another direction
+            if (distance < separationRadius && distance > 0f)
+            {
+                Vector2 awayDir = (rb.position - other.rb.position).normalized;
+                steering += awayDir / distance; // Closer objects push away harder
+                count++;
+            }
+        }
 
     if (count > 0)
     {
@@ -242,29 +298,67 @@ private Vector2 CalculateSeparation()
     }
 
     return steering;
-}
-// 1. Make sure you have a reference to your GridManager
-
-
-private void FindPathToPlayer()
-{
-    if (gridManager == null || player == null) return;
-
-    // 2. Identify the START node (where the hunter currently is)
-    Node startNode = gridManager.NodeFromWorldPoint(rb.position);
-
-    // 3. Identify the TARGET node (where the player currently is)
-    Node targetNode = gridManager.NodeFromWorldPoint(player.position);
-
-    // 4. (Optional check) Make sure the target node isn't inside a wall!
-    if (!targetNode.walkable)
-    {
-        Debug.LogWarning("Player is standing on an unwalkable node/wall!");
-        return;
     }
 
-    // Now you can pass `startNode` and `targetNode` directly into your A* pathfinding script!
-    // Example: List<Node> path = Pathfinding.FindPath(startNode, targetNode);
+
+    private void FindPathToPlayer()
+{
+    nextPathRefreshTime = Time.time + Mathf.Max(0.1f, pathRefreshInterval);
+    currentPath.Clear();
+    currentWaypointIndex = 0;
+    pathAvailable = false;
+
+    if (gridManager == null || pathfinder == null || player == null)
+        return;
+
+    pathGoal = player.position;
+    Node goalNode = gridManager.NodeFromWorldPoint(pathGoal);
+
+    if (goalNode == null || !goalNode.walkable)
+        return;
+
+    List<Node> path = pathfinder.FindPath(rb.position, pathGoal);
+    if (path != null)
+    {
+        currentPath = path;
+        pathAvailable = true;
+    }
 }
+
+    private Vector2 FollowPath()
+    {
+        // Brake if A* could not produce a route.
+        if (!pathAvailable)
+            return -velocity;
+
+        // Skip waypoints already reached; the distance check absorbs small movement offsets.
+        while (currentWaypointIndex < currentPath.Count &&
+            Vector2.Distance(rb.position, currentPath[currentWaypointIndex].worldPosition) < 0.1f)
+        {
+            currentWaypointIndex++;
+        }
+
+        if (currentWaypointIndex < currentPath.Count)
+        {
+            // Steer toward the next tile center; ApplySteering handles acceleration and speed limits.
+            Vector2 toWaypoint = currentPath[currentWaypointIndex].worldPosition - rb.position;
+            Vector2 desiredVelocity = toWaypoint.sqrMagnitude > 0f
+                ? toWaypoint.normalized * maxSpeed
+                : Vector2.zero;
+            return desiredVelocity - velocity;
+        }
+
+        // The path ends at a grid cell center; finish smoothly at the exact flanking position.
+        return ArriveAtPoint(pathGoal);
+    }
+
+    private Vector2 GetOrbitPoint(Vector2 targetPosition)
+    {
+        // Space hunters evenly around the player based on their Inspector-assigned index.
+        float angle = ((float)hunterIndex / Mathf.Max(1, totalHunters)) * 360f;
+        float radians = angle * Mathf.Deg2Rad;
+        Vector2 direction = new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+        return targetPosition + direction * orbitDistance;
+    }
     
 }
